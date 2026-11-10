@@ -94,6 +94,7 @@ class RainDial(QWidget):
         self._preview_until = 0.0
         self._lit = 1.0 if timer.phase != IDLE else IDLE_LIT
         self._rad = RAD_START
+        self._drawn_look = None
         self._ticks = 0
         self._tip_until = 0.0
         self.on_poll = []  # 每秒回调，托盘据此刷新
@@ -246,11 +247,28 @@ class RainDial(QWidget):
         lit = IDLE_LIT if idle and not self._celebrate else 1.0
         self._lit += (lit - self._lit) * LIT_EASE
         self._update_tip()
-        self.update()
+        look = self._look()
+        if look is None or look != self._drawn_look:
+            self._drawn_look = look
+            self.update()
         if self.vis <= 0.0 and not show and self.ladder is None:
             self.hide()
             self._tip.hide()
             self._anim.stop()
+
+    def _look(self):
+        """决定画面的量，没变就不重画；业力梯在场时返回 None，表示每帧都画。"""
+        if self.ladder is not None:
+            return None
+        pips = tuple(round(v, 2) for circle in self._pip_circles() for v in circle)
+        return (
+            self.devicePixelRatioF(),
+            self.vis,
+            round(self._rad, 2),
+            round(self._lit, 3),
+            self._shown_karma,
+            pips,
+        )
 
     def _step_tick(self):
         """晴天 pip 显示时每半个周期脉动一下；弹出或有人在看（悬停、快捷键读数、卡片）时还响一声。"""
@@ -441,16 +459,16 @@ class RainDial(QWidget):
             p.drawPixmap(QRectF(-w / 2.0, -h / 2.0, w, h), pm, QRectF(pm.rect()))
             p.restore()
 
-    def _paint_pips(self, p, c):
+    def _pip_circles(self):
         t = self.timer
-        n = t.pips()
+        if t.phase == RAIN:
+            return []
         if t.phase == DRY:
-            circles = self.ring.circles(n, 1.0 - t.progress(), DRAIN, self._rad)
-        elif t.phase == RAIN:
-            return
-        else:
-            circles = self.ring.circles(n, 1.0, HOLLOW, self._rad)
-        for x, y, rad, thick in circles:
+            return self.ring.circles(t.pips(), 1.0 - t.progress(), DRAIN, self._rad)
+        return self.ring.circles(t.pips(), 1.0, HOLLOW, self._rad)
+
+    def _paint_pips(self, p, c):
+        for x, y, rad, thick in self._pip_circles():
             pos = QPointF(c.x() + x * PIP_SCALE, c.y() - y * PIP_SCALE)
             r = rad * PIP_SCALE
             if thick < 0.0 or thick * PIP_SCALE >= r:

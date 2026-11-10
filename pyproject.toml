@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "slugcatpet"
-version = "1.3.3"
+version = "1.3.4"
 description = "Slugcat desktop pet for Windows: Rain World slugcat companions, bilingual (zh/en)."
 readme = "README.md"
 license = "MIT"

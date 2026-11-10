@@ -12,7 +12,7 @@ from .state import MakeWay
 class MakeWayBehavior(Behavior):
     key = "makeway"
     title = {"zh": "让路", "en": "Make way"}
-    doc = "别的猫要从这里过时让开：地上趴下让它跨过去，横杆上换到杆的另一面，竖杆上顺着挪开。自己走到一半路断了就放下这件事。"
+    doc = "别的猫要从这里过时让开：地上趴下让它跨过去，横杆上换到杆的另一面，竖杆上顺着挪开；停在别的猫身上又不走时自己跳下来。自己走到一半路断了就放下这件事。"
 
     def mount(self, fsm):
         fsm.add_state(MakeWay)

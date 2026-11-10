@@ -5,8 +5,18 @@ from __future__ import annotations
 import math
 import random
 
-from PySide6.QtCore import QPointF, QRect, QRectF, Qt
-from PySide6.QtGui import QBrush, QColor, QFont, QGuiApplication, QPainter, QRadialGradient
+from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtGui import (
+    QBrush,
+    QColor,
+    QFont,
+    QFontMetricsF,
+    QGuiApplication,
+    QPainter,
+    QRadialGradient,
+    QTextLayout,
+    QTextOption,
+)
 
 from ...core.units import lerp
 from ...rendering.primitives import blit
@@ -25,13 +35,13 @@ PALETTE = (
     (0, 179, 26),
 )
 
-DRAW_SCALE = 1.5
-GLOW_RADIUS = 14.0
+DRAW_SCALE = 1.0
+GLOW_RADIUS = 10.0
 GLOW_ALPHA = 0.5
-GLYPH_SCALE = 2.0
-GLYPH_LIFT = 17.0  # 符文中心到珍珠中心的距离
+GLYPH_SCALE = 1.5
+GLYPH_LIFT = 12.5  # 符文中心到珍珠中心的距离
 GLYPH_BOB = 1.2
-GLYPH_HALF = 7.0  # 符文画出来的半高
+GLYPH_HALF = 5.5  # 符文画出来的半高
 
 HOVER_PAD = 8.0
 HOVER_DELAY = 14  # 光标停在珍珠上多少 tick 后显示文字
@@ -42,12 +52,13 @@ NOTE_SHORT_SCALE = 1.25
 NOTE_LINE_EM = 20  # 每行最多约这么多个汉字宽
 NOTE_MAX_LINES = 10
 NOTE_PAD = 7.0
-NOTE_GAP = 6.0  # 文字框和珍珠（有符文时是符文）之间的空隙
-NOTE_EDGE = 4.0
+NOTE_GAP = 8.0  # 文字框和珍珠（有符文时是符文）之间的空隙
+NOTE_EDGE = 6.0
+NOTE_RADIUS = 6.0
 NOTE_BG = (0, 0, 0, 175)
 NOTE_TEXT = (255, 255, 255, 235)
 _WHITE = (255, 255, 255)
-_WRAP = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop | Qt.TextFlag.TextWordWrap
+_NOTE_ALIGN = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
 
 
 def _mix(c, d, k):
@@ -258,29 +269,65 @@ def _note_font(text):
     return f
 
 
+def _layout_note(text, font, HL):
+    fm = QFontMetricsF(font)
+    ls = fm.lineSpacing()
+    wrap = fm.horizontalAdvance("中") * NOTE_LINE_EM
+    room = min(HL - NOTE_GAP - NOTE_PAD * 2.0 - 8.0, ls * NOTE_MAX_LINES)
+    cap = max(1, int(room // ls))
+    opt = QTextOption()
+    opt.setWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
+    out = []
+    paras = text.split("\n")
+    for pi, para in enumerate(paras):
+        lay = QTextLayout(para, font)
+        lay.setTextOption(opt)
+        lay.beginLayout()
+        while len(out) < cap:
+            ln = lay.createLine()
+            if not ln.isValid():
+                break
+            ln.setLineWidth(wrap)
+            a, n = ln.textStart(), ln.textLength()
+            if len(out) == cap - 1:
+                if a + n < len(para):
+                    out.append(fm.elidedText(para[a:], Qt.TextElideMode.ElideRight, wrap))
+                    break
+                if pi < len(paras) - 1:
+                    out.append(fm.elidedText(para[a:].rstrip() + "…", Qt.TextElideMode.ElideRight, wrap))
+                    break
+            out.append(para[a : a + n].rstrip())
+        lay.endLayout()
+        if len(out) >= cap:
+            break
+    w = max((fm.horizontalAdvance(s) for s in out), default=0.0)
+    return out, w, ls
+
+
 def _draw_note(win, p, o, alpha):
     p.save()
-    text = _compact(o.text)
-    p.setFont(_note_font(text))
-    fm = p.fontMetrics()
-    wrap = fm.horizontalAdvance("中") * NOTE_LINE_EM
-    room = int(min(win._HL - NOTE_GAP - NOTE_PAD * 2.0 - 8.0, fm.lineSpacing() * NOTE_MAX_LINES))
-    box = fm.boundingRect(QRect(0, 0, wrap, 100000), int(_WRAP), text)
-    while box.height() > room and "\n" in text:
-        text = text.rsplit("\n", 1)[0] + "…"
-        box = fm.boundingRect(QRect(0, 0, wrap, 100000), int(_WRAP), text)
-    w, h = box.width() + NOTE_PAD * 2.0, min(box.height(), room) + NOTE_PAD * 2.0
-    x = min(max(o.x - w * 0.5, NOTE_EDGE), win._WL - w - NOTE_EDGE)
+    k = win._scale or 1
+    p.scale(1.0 / k, 1.0 / k)
+    key = (o.text, win._HL, k, QGuiApplication.font().key())
+    if o.note_cache is None or o.note_cache[0] != key:
+        text = _compact(o.text)
+        font = _note_font(text)
+        o.note_cache = (key, font, *_layout_note(text, font, win._HL * k))
+    _, font, lines, bw, ls = o.note_cache
+    p.setFont(font)
+    w, h = bw + NOTE_PAD * 2.0, ls * len(lines) + NOTE_PAD * 2.0
+    x = min(max(o.x * k - w * 0.5, NOTE_EDGE), win._WL * k - w - NOTE_EDGE)
     above = GLYPH_LIFT + GLYPH_HALF + GLYPH_BOB if o.glyph is not None and o.glyph_fade > 0.0 else o.rad
-    y = o.y - above - NOTE_GAP - h
+    y = (o.y - above) * k - NOTE_GAP - h
     if y < NOTE_EDGE:
-        y = o.y + o.rad + NOTE_GAP
+        y = (o.y + o.rad) * k + NOTE_GAP
     p.setOpacity(alpha)
     p.setBrush(QColor(*NOTE_BG))
     p.setPen(QColor(*o.rgb(), 200))
-    p.drawRoundedRect(QRectF(x, y, w, h), 6.0, 6.0)
+    p.drawRoundedRect(QRectF(x, y, w, h), NOTE_RADIUS, NOTE_RADIUS)
     p.setPen(QColor(*NOTE_TEXT))
-    p.drawText(QRectF(x + NOTE_PAD, y + NOTE_PAD, box.width(), h - NOTE_PAD * 2.0), int(_WRAP), text)
+    for i, s in enumerate(lines):
+        p.drawText(QRectF(x + NOTE_PAD, y + NOTE_PAD + i * ls, bw + 1.0, ls), int(_NOTE_ALIGN), s)
     p.restore()
 
 

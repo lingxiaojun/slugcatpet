@@ -9,7 +9,7 @@ from ...core.units import lerp
 from ..state import ItemState
 from ..stone.model import Stone
 
-TEXT_MAX = 100
+TEXT_MAX = 1024
 GLYPH_COUNT = 14
 PLAIN_RGB = (179, 179, 179)
 
@@ -33,6 +33,7 @@ class Pearl(Stone):
         "glimmer",
         "last_glimmer",
         "hover_ticks",
+        "note_cache",
         "glyph_fade",
         "_calm",
         "_glim_prog",
@@ -49,6 +50,7 @@ class Pearl(Stone):
         self.editing = False
         self.glimmer = self.last_glimmer = 0.0
         self.hover_ticks = 0
+        self.note_cache = None
         self.glyph_fade = 0.0
         self._calm = 0
         self._glim_prog = 1.0

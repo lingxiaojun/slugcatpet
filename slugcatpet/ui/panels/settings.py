@@ -122,6 +122,7 @@ class SettingsWindow(QWidget):
 
     def showEvent(self, ev):
         super().showEvent(ev)
+        self.refresh_fps()  # 隐藏期间档位可能变了
         self.visible_changed.emit(True)
 
     def hideEvent(self, ev):
@@ -375,6 +376,12 @@ class SettingsWindow(QWidget):
         amount.setPageStep(10)
         v.addLayout(row)
         w = self._window
+        self._check(
+            v,
+            "settings_rain_window_block",
+            w.cfg_rain_window_block,
+            lambda on: (w.set_rain_window_block(on), self._write_state()),
+        )
         fs = _Combo()
         fs.addItem(t("settings_fs_hide"), "hide")
         fs.addItem(t("settings_fs_sink"), "sink")

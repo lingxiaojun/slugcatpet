@@ -170,6 +170,9 @@ class PetWindow(EffectsMixin, ItemHost, QWidget):
         self._cycle_rain_stopped_cb = None  # 手动关掉雨循环的大雨时回调
         self.cfg_rain_amount = clampf(float(self._params.get("rain_amount", tuning.RAIN_AMOUNT)), 0.05, 1.0)
         self.rain = Rain(seed=self._seed)
+        self.cfg_rain_window_block = self.rain.window_block = bool(
+            self._params.get("rain_window_block", False)
+        )
         self._shelter_timer = QTimer(self)
         self._shelter_timer.setInterval(tuning.RAIN_SHELTER_POLL_MS)
         self._shelter_timer.timeout.connect(self._poll_shelters)
@@ -363,7 +366,8 @@ class PetWindow(EffectsMixin, ItemHost, QWidget):
             if any(abs(h.vx) + abs(h.vy) > self._MOTION_STILL for h in pet.gfx.hands):
                 return True
         return any(
-            abs(o.vx) + abs(o.vy) > self._MOTION_STILL or getattr(o, "animating", False) for o in self._items()
+            abs(o.vx) + abs(o.vy) > self._MOTION_STILL or getattr(o, "animating", False)
+            for o in self._items()
         )
 
     def _on_timer(self):
@@ -483,7 +487,7 @@ class PetWindow(EffectsMixin, ItemHost, QWidget):
         if self._pacer.frame(
             dt, busy, self._divider / self._pacer.hz if self._mode == "vsync" else self._iv_fast / 1000.0
         ):
-            self._calc_intervals()
+            self._restart_timer()
             sp = getattr(self, "_settings_panel", None)
             if sp is not None and hasattr(sp, "refresh_fps"):
                 sp.refresh_fps()
@@ -536,8 +540,11 @@ class PetWindow(EffectsMixin, ItemHost, QWidget):
             self._env_rain.stop()
         if self._shutting_down:
             return
-        if reason == "env" and self._shelter_timer.isActive():  # 先取好遮挡再出画面
-            self._poll_shelters()
+        if reason == "env":
+            self._pacer.reset(self.display_hz())  # 全屏程序退了，它造成的降档不算数
+            self._calc_intervals()
+            if self._shelter_timer.isActive():  # 先取好遮挡再出画面
+                self._poll_shelters()
         self._last_ns = self._clock.nsecsElapsed()
         self._last_vsync = False
         self._mode = None
@@ -891,6 +898,10 @@ class PetWindow(EffectsMixin, ItemHost, QWidget):
         if self.rain_on and self.cycle_rain is None:
             self.rain.set_target(self.cfg_rain_amount * RAIN_I_MAX)
 
+    def set_rain_window_block(self, on):
+        self.cfg_rain_window_block = self.rain.window_block = self._params["rain_window_block"] = bool(on)
+        self.update()
+
     def _poll_shelters(self):
         """取挡雨窗口的矩形，换算到逻辑坐标；全屏收起时不取，免得把全屏程序当成遮挡。"""
         if self.env_hidden:
@@ -912,6 +923,7 @@ class PetWindow(EffectsMixin, ItemHost, QWidget):
         if not self.rain_on and not rain.active:
             if self._shelter_timer.isActive():
                 self._shelter_timer.stop()
+                rain.release()
             return
         rain.resize(self._WL, self._HL)
         rain.step()

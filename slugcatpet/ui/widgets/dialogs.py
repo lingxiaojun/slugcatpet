@@ -82,6 +82,14 @@ class CardDialog(QDialog):
             y += offset.y()
         self.move(self._clamped(QPoint(x, y)))
 
+    def refit(self):
+        self._card.layout().activate()
+        self._card.adjustSize()
+        size = self._card.size()
+        self.resize(size)
+        self._card.setGeometry(0, 0, size.width(), size.height())
+        self.move(self._clamped(self.pos()))
+
     def _clamped(self, pos: QPoint) -> QPoint:
         return clamp_rect(pos, self.width(), self.height())
 
@@ -154,10 +162,7 @@ class ConfirmDialog(CardDialog):
         doc.setPlainText(n.toPlainText())
         doc.setTextWidth(n.viewport().width())
         n.setFixedHeight(min(NOTE_MAX_HEIGHT, int(doc.size().height()) + extra + 8))
-        self._card.adjustSize()
-        size = self._card.size()
-        self.resize(size)
-        self._card.setGeometry(0, 0, size.width(), size.height())
+        self.refit()
 
 
 class PickDialog(CardDialog):

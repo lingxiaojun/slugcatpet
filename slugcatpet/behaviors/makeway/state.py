@@ -47,6 +47,10 @@ class MakeWay(State):
             b.stop_walk()
             self._done()
             return
+        if self.kind == "off":
+            if not b.walk_to(b.chunk1.x, None):
+                self.kind = None
+            return
         cm = map_for(fsm.win)
         here = locate(cm, fsm.win)
         if here is None or here[0] not in ("H", "S", "V") or (self.kind == "clear") != (here[0] == "V"):
@@ -64,12 +68,16 @@ class MakeWay(State):
         o = fsm.social.order(fsm.win)
         if o is not None:
             self.by, self.dir = o.by, o.dir
-        ob = self.by.body
-        fsm.gfx.look_at = (ob.chunk0.x, ob.chunk0.y)
+        if self.by is not None:
+            ob = self.by.body
+            fsm.gfx.look_at = (ob.chunk0.x, ob.chunk0.y)
         if fsm.timer > TIMEOUT:
             fsm.social.traffic.fallback(fsm.win, "让路超时")
         if self.kind is None or fsm.timer > TIMEOUT:
             self._done()
+        elif self.kind == "off":
+            if fsm.body.walk_target_x is None:
+                self._done()
         elif self.kind == "lie":
             self._lie(o)
         elif self.kind == "swap":

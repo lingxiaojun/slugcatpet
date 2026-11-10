@@ -10,9 +10,7 @@ from PySide6.QtCore import QObject, Qt, Signal, Slot
 
 _IS_WIN = sys.platform == "win32"
 
-EST_MIN = 120  # 攒够这么多个单周期间隔才用实测周期
-EST_SPAN = 1200  # 实测周期的样本数上限，到了就重新起算
-EST_TOL = 0.05  # 实测周期偏离标称超过这个比例时不采用
+SCALE_S = 0.25  # 每隔这么久按真实时长校正一次 dt；标称周期在游戏切刷新率、可变刷新率时不准
 MAX_ERRORS = 3  # 连续等待失败这么多次就重开适配器
 RETRY_S = 0.005
 
@@ -82,7 +80,7 @@ class _Adapter:
 
 
 class VsyncDriver(QObject):
-    """每 divider 次 vblank 发一次 tick(dt)，dt 为按刷新周期计的间隔（秒），0 表示间隔未知。
+    """每 divider 个标称周期发一次 tick(dt)，dt 为校正到真实时长的间隔（秒），0 表示间隔未知。
 
     主线程没处理完上一拍时不再投递，漏掉的 vblank 计进下一拍的 dt。
     打不开适配器或反复等待失败时发 failed，直到 retarget 换屏或换刷新率再试。
@@ -97,7 +95,7 @@ class VsyncDriver(QObject):
         self._lock = threading.Lock()
         self._wake = threading.Event()
         self._screen = screen_name
-        self._nominal = self._period = 1.0 / hz
+        self._period = 1.0 / hz
         self._reopen = True
         self._running = False
         self._stop = False
@@ -114,10 +112,10 @@ class VsyncDriver(QObject):
     def retarget(self, screen_name: str, hz: float):
         """换屏或刷新率变了：重开适配器、按新刷新率重估周期。"""
         with self._lock:
-            if screen_name == self._screen and abs(1.0 / hz - self._nominal) < 1e-6 and self._ok:
+            if screen_name == self._screen and abs(1.0 / hz - self._period) < 1e-6 and self._ok:
                 return
             self._screen = screen_name
-            self._nominal = self._period = 1.0 / hz
+            self._period = 1.0 / hz
             self._reopen = True
             self._ok = True
 
@@ -160,9 +158,11 @@ class VsyncDriver(QObject):
     def _run(self):
         adapter = None
         prev = None  # 上次醒来的时刻
-        est_sum, est_n = 0.0, 0  # 单周期间隔之和与个数，估实测周期
         acc = 0  # 上次投递以来经过的 vblank 数
         lost = True  # 这段间隔里有数不清的 vblank
+        beat_t = 0.0  # 上次投递的时刻
+        scale = 1.0  # 真实时长 ÷ 标称计时
+        span_real, span_nominal = 0.0, 0.0
         errors = 0
         try:
             while not self._stop:
@@ -180,7 +180,7 @@ class VsyncDriver(QObject):
                         adapter.close()
                     adapter = _Adapter(name)
                     prev, lost = None, True
-                    est_sum, est_n = 0.0, 0
+                    scale, span_real, span_nominal = 1.0, 0.0, 0.0
                     if not adapter.ok:
                         adapter = None
                         self._fail()
@@ -203,21 +203,18 @@ class VsyncDriver(QObject):
                     continue
                 with self._lock:
                     period = self._period
-                    k = max(1, round((t - prev) / period))
-                    if 0.75 * period < t - prev < 1.25 * period:
-                        est_sum += t - prev
-                        est_n += 1
-                    if est_n >= EST_MIN:
-                        est = est_sum / est_n
-                        if abs(est - self._nominal) < EST_TOL * self._nominal:
-                            self._period = est
-                        if est_n >= EST_SPAN:
-                            est_sum, est_n = 0.0, 0
+                acc += max(1, round((t - prev) / period))
                 prev = t
-                acc += k
                 if acc >= self._divider and not self._pending and self._running:
                     self._pending = True
-                    self._beat.emit(0.0 if lost else acc * period)
+                    self._beat.emit(0.0 if lost else acc * period * scale)
+                    if not lost:
+                        span_real += t - beat_t
+                        span_nominal += acc * period
+                        if span_real >= SCALE_S:
+                            scale = span_real / span_nominal
+                            span_real, span_nominal = 0.0, 0.0
+                    beat_t = t
                     acc, lost = 0, False
         except RuntimeError:
             pass  # 窗口已销毁

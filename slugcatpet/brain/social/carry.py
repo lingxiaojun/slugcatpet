@@ -27,7 +27,7 @@ THROW_POW = (4.0, 14.0)  # 每一节加的出手速度的上下限
 THROW_AHEAD = 8.0  # 出手时被扔的猫至少在背者身前这么远
 THROW_BACK_UP = 20.0  # 从背上扔时先举到上身上方这么高
 THROW_SAFE = 80  # 被扔出后这么多 tick 内摔落不晕不死
-DROP_GHOST = 10  # 下来后这么多 tick 内不和别的猫相撞
+DROP_GHOST = 10  # 下来后这么多 tick 内不和带着它的猫相撞
 CARRIER_STUN_DROP = (40, 80)  # 背者晕得比其间随机一个数久就松开
 DROP_SPEED = 25.0  # 背者被甩得比这快就松开
 POLE_LIFT = 0.75  # 背者爬杆时拉着的那只的重力抵掉这么多
@@ -162,7 +162,7 @@ class Carry:
             rb.chunk0.vy = cb.chunk0.vy + math.sin(a) * k
             rb.chunk1.y -= DROP_LIFT
         rb.ride = rb.ride_with = None
-        rb.ghost = max(rb.ghost, DROP_GHOST)
+        rb.pass_through((cb,), DROP_GHOST)
 
     def throw(self, rider, d, ix, iy):
         """往 d 那侧扔出去：角度和力度按按键与被扔的猫的质量，跟原版扔东西一样算；从背上扔时举过上身。"""
@@ -189,7 +189,7 @@ class Carry:
         if not from_back:
             _free_hand(cb)
         rb.ride = rb.ride_with = None
-        rb.ghost = max(rb.ghost, DROP_GHOST)
+        rb.pass_through((cb,), DROP_GHOST)
         rb.feet_stuck = rb.crawl_anchor = None
         rb.stop_walk()
         rb.standing = True

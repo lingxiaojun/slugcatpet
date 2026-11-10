@@ -1,4 +1,5 @@
 """场景曲的 Vorbis setup 头（libvorbis 生成，BSD），由 tools/gen_vorbis_setups.py 生成，勿手改。"""
+
 import base64
 import json
 import zlib
@@ -124,5 +125,7 @@ _BLOB = (
 )
 
 # crc32 → (短块长, 长块长, setup 头, 模式表)
-SETUPS = {int(k): (v[0], v[1], base64.b64decode(v[2]), v[3])
-          for k, v in json.loads(zlib.decompress(base64.b64decode(_BLOB))).items()}
+SETUPS = {
+    int(k): (v[0], v[1], base64.b64decode(v[2]), v[3])
+    for k, v in json.loads(zlib.decompress(base64.b64decode(_BLOB))).items()
+}

@@ -271,6 +271,7 @@ _STR = {
     "settings_water_depth": {"zh": "水深", "en": "Water depth"},
     "settings_rain": {"zh": "下雨", "en": "Rain"},
     "settings_rain_amount": {"zh": "雨量", "en": "Rainfall"},
+    "settings_rain_window_block": {"zh": "窗口里不下雨", "en": "No rain over windows"},
     "settings_rain_volume": {"zh": "雨声", "en": "Rain sound"},
     "settings_meow_volume": {"zh": "喵声", "en": "Meows"},
     "settings_meow_missing": {

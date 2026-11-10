@@ -5,12 +5,13 @@
 from __future__ import annotations
 
 import logging
+import math
 from collections import namedtuple
 
 from ... import tuning
 from ...core.stride import ARRIVE, TO, Stride
 from .ground import BRAKE, WALK_V, Plan, gait, lead, near_edge, plan, snapshot
-from .space import FLOOR, ON_CAT, POLE, sign, stand_half, stuck
+from .space import FLOOR, ON_CAT, POLE, TOUCH_TOL, sign, stand_half, stuck
 
 log = logging.getLogger(__name__)
 
@@ -20,18 +21,20 @@ WATER_BAND = 26.0  # 水里上下相差这么多以内才会挡路
 HOP_DIST = 44.0  # 水里离挡路的猫这么近时从水面跳过去
 SHOVE_TICKS = 20  # 顶着杆尖上的猫往上挤这么久就把它顶下去
 SHOVE_FALL_VX = 3.5  # 被顶下去时的横向速度
-SHOVE_GHOST = 45  # 被顶下去后穿过别的猫的 tick，免得和杆上的猫撞翻
+SHOVE_GHOST = 45  # 被顶下去后穿过同一根杆上的猫的 tick，免得和它们撞翻
 LOOK = 90.0  # 身前一排、在走的猫离这么近才管；照走法走从这和 ground.lead 里远的那个起
 STOP_GAP = 8.0  # 跟在别的猫后面时隔这么远
-GET_OFF_GHOST = 20  # 停在别的猫身上又不走时穿过它落到地上
+OFF_WAIT = 8
+OFF_GIVE_UP = 60
+GET_OFF_GHOST = 20
 FALLBACK_TICKS = 200  # 兜底：有要去的地方却这么久一点没靠近，记下现场并交回行为（设计上不该发生）
-YIELD = ("lie", "swap", "clear")  # 由让路状态执行的指令
+YIELD = ("lie", "swap", "clear", "off")  # 由让路状态执行的指令
 
-# 让路指令：kind 见 YIELD，by 是对方，dir 在地上是趴下的朝向、杆上是对方的去向
+# 让路指令：kind 见 YIELD（off 是从别的猫身上下来），by 是对方，dir 在地上是趴下的朝向、杆上是对方的去向
 Order = namedtuple("Order", "kind by dir")
 
 
-def _knock_off(pet):
+def _knock_off(pet, lane):
     """把站在杆尖上的猫顶下去，往它偏的那侧掉。"""
     b = pet.body
     if getattr(pet, "controlled", False) or pet.held is not None or not b.on_pole:
@@ -40,7 +43,7 @@ def _knock_off(pet):
     b.let_go_pole()
     b.chunk0.vx += side * SHOVE_FALL_VX
     b.chunk1.vx += side * SHOVE_FALL_VX * 0.4
-    b.ghost = SHOVE_GHOST
+    b.pass_through(lane, SHOVE_GHOST)
     if pet.behavior is not None:
         pet.behavior.pole_lost()
     return True
@@ -56,6 +59,7 @@ class Traffic:
         self.waiting = set()  # 迎面输了原地等的猫，下一 tick 的占位里算停住
         self.plans = {}  # 一排的样子（ground.snapshot 的键）→ 走法或 None
         self.progress = {}  # 猫 → (意图, 离落脚处最近到过多近, 之后多少 tick 没更近)
+        self.perched = {}
         self._shoving = {}
 
     def update(self):
@@ -68,7 +72,8 @@ class Traffic:
             if b is not None:
                 b.lane_hold, b.lane_blocked = 0, False
         self._shoving = {}
-        for lane, occs in space.lanes().items():
+        lanes = space.lanes()
+        for lane, occs in lanes.items():
             if lane[0] == "V":
                 self.tips.update(lane for o in occs if o.pet.body.animation != "ClimbOnBeam")
             if len(occs) < 2:
@@ -81,7 +86,8 @@ class Traffic:
         for p, top in self._shoving.items():
             if self.shove[p] >= SHOVE_TICKS:
                 self.shove.pop(p)
-                if _knock_off(top):
+                lane = [q.pet.body for q in lanes.get(("V", round(top.body.pole_x)), ())]
+                if _knock_off(top, lane):
                     self.social.bonds.nudge(p, top, tuning.BOND_SHOVE)
 
     def tip_free(self, pet):
@@ -135,12 +141,14 @@ class Traffic:
     # 地上
 
     def _ground(self, space):
+        perched, self.perched = self.perched, {}
         for o in space.occs.values():
             pet, b = o.pet, o.pet.body
-            if b.walk_target_x is None or getattr(pet, "controlled", False):
+            idle = b.walk_target_x is None
+            if o.pose == ON_CAT and not stuck(pet):
+                self._perch(space, o, idle, *perched.get(pet, (0, False)))
+            if idle or getattr(pet, "controlled", False):
                 self._end(pet)
-                if o.pose == ON_CAT and b.stride is None and not stuck(pet):
-                    b.ghost = max(b.ghost, GET_OFF_GHOST)  # 停在别的猫身上又不走：穿过它落到地上
                 continue
             if o.pose in (FLOOR, ON_CAT):  # 空中、杆上：落地再说
                 t = space.reach(pet, b.walk_target_x, b.walk_tol, keep=b.target_x)
@@ -148,12 +156,27 @@ class Traffic:
                     self._block(o)
                     continue
                 b.target_x = o.target = t  # 后面的猫这一 tick 就避开它
-                if o.pose == FLOOR and not space.free(pet, o.lo, o.hi, parked=True):
-                    b.ghost = max(b.ghost, 2)  # 在地上和停住的猫叠着：穿过它走开，免得拖着它走
+                if o.pose == FLOOR:  # 在地上和停住的猫叠着：穿过它走开，免得拖着它走
+                    b.pass_through([q.pet.body for q in space.parked(pet) if _overlap(o, q)], 2)
                 d = sign(t - o.x)
                 if not self._walkers(space, o, t, d):
                     self._pass(space, o, t, d)
             self._call(space, o)
+
+    def _perch(self, space, o, idle, n, called):
+        pet, b = o.pet, o.pet.body
+        n += 1
+        if not (idle or called):
+            n, called = 0, False
+        elif b.stride is not None:
+            pass
+        elif n >= OFF_GIVE_UP or (idle and n >= OFF_WAIT and space.reach(pet, o.x, None) is None):
+            b.pass_through(_touching(space, pet), GET_OFF_GHOST)
+            n, called = 0, False
+        elif idle and n >= OFF_WAIT:
+            self._order(pet, "off", None, 0)
+            called = True
+        self.perched[pet] = (n, called)
 
     def _pass(self, space, o, t, d):
         """身前一排进了视线就照它的走法走；走法变了（这排的样子变了）就换。从远处走过来、走着过不比站定费事的，走着过。"""
@@ -277,3 +300,19 @@ class Traffic:
     def _order(self, pet, kind, by, d):
         if pet not in self.orders:
             self.orders[pet] = Order(kind, by, d)
+
+
+def _overlap(a, q):
+    return q.lo < a.hi - TOUCH_TOL and a.lo + TOUCH_TOL < q.hi
+
+
+def _touching(space, pet):
+    h = pet.body.chunk1
+    return [
+        q.pet.body
+        for q in space.others(pet)
+        if any(
+            math.hypot(c.x - h.x, c.y - h.y) <= c.rad + h.rad + TOUCH_TOL
+            for c in q.pet.body.collision_chunks()
+        )
+    ]

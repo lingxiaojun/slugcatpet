@@ -90,8 +90,8 @@ def extent(o, d):
     return o.lo, o.hi
 
 
-def build(pet, waiting):
-    """一只猫这一 tick 的占位；waiting 是原地等迎面的猫先过的；不在场上（没身体）返回 None。"""
+def build(pet, waiting, last):
+    """一只猫这一 tick 的占位；waiting 是原地等迎面的猫先过的，last 是它上一 tick 的占位；不在场上（没身体）返回 None。"""
     b = getattr(pet, "body", None)
     fsm = getattr(pet, "behavior", None)
     if b is None or fsm is None:
@@ -109,7 +109,8 @@ def build(pet, waiting):
     o.key = (fsm._cur().tier, pet.index)
     o.state = fsm.state
     o.giving = o.state == "MakeWay"
-    o.lane, o.s, o.y, o.d, o.v = None, c1.x, c1.y, 0, abs(c1.vx)
+    o.lane, o.s, o.y, o.d = None, c1.x, c1.y, 0
+    o.v = abs(c1.x - last.s) if last is not None and last.lane is None else abs(c1.vx)
     o.lying = o.parked = o.blocks = False
     o.under = o.target = None
     if fsm.grab.active:
@@ -191,7 +192,7 @@ class Space:
     def tick(self):
         occs = {}
         for p in self.social.win.pets:
-            o = build(p, self.social.traffic.waiting)
+            o = build(p, self.social.traffic.waiting, self.occs.get(p))
             if o is not None:
                 occs[p] = o
         self.occs = occs

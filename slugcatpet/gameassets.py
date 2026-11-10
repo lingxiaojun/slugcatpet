@@ -64,6 +64,7 @@ def _steam_root() -> Path | None:
     return None
 
 
+@functools.cache  # 要探测每个盘符，皮肤监视又每隔几秒用一次
 def _steam_libraries() -> list[Path]:
     roots: list[Path] = []
     sr = _steam_root()
@@ -419,6 +420,7 @@ def ensure_atlases() -> Path:
     for d in (assets_dir(), bundled_assets_dir()):
         if atlases_present(d):
             return d
+    _steam_libraries.cache_clear()  # 用户可能刚装好 Steam 再点重试
     install = detect_install()
     if not install:
         raise SetupError(t("err_no_install"))

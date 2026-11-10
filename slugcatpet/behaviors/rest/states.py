@@ -54,7 +54,8 @@ class LieDown(State):
         self.why, self.next_why = self.next_why or EXHAUST, None
         b.stop_walk()
         self.face = None
-        spot = fsm.social.space.lie_spot(fsm.win) if b.standing else None  # 这里趴下会压到别的猫就先挪到走得到的空地
+        # 这里趴下会压到别的猫就先挪到走得到的空地
+        spot = fsm.social.space.lie_spot(fsm.win) if b.standing else None
         if spot is None:
             b.set_posture(False)
             return

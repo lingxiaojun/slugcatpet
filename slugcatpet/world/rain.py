@@ -30,8 +30,8 @@ SHELTER_MARGIN = 36.0  # 躲雨落脚点离遮挡边缘的最小距离，约一�
 DIR_RETARGET = 0.025  # 每 tick 换风向目标的概率
 DIR_LERP = 0.01
 DIR_STEP = 0.0125
-SLANT_MAX = 0.22  # 风向 ±1 时雨丝的横移比
-SLANT_BUCKETS = 9  # 雨丝贴图按斜度分档缓存
+SLANT_MAX = 0.11  # 风向 ±1 时雨丝的横移比
+SLANT_BUCKETS = 5  # 雨丝贴图按斜度分档缓存
 
 TILE = 256  # 雨丝贴图边长（逻辑 px）
 # 雨丝是并排的一暗一亮两道细线，深浅背景上都看得见
@@ -47,7 +47,7 @@ FALL_SPEED = 44.0  # 合成后的雨每 tick 下落距离
 SOFT = (1, 2)  # 雨丝贴图的横、纵模糊半径（雨层 px）
 STREAK_FADE = 1.0  # 暴雨阶段雨丝淡出多少，让给雨幕
 KEYS = 32  # 画面强度每隔 1/KEYS 预合成一张关键帧，之间按比例叠画
-KEY_KEEP = 24  # 关键帧最多留几张
+KEY_KEEP = 2 * (2 * SLANT_BUCKETS + 2)  # 雨强不变时要用的张数：雨丝、淡雨每斜度档两张，露天、屋檐下各两张
 BLEND_STEPS = 64  # 两张关键帧之间按这么多档混合
 JITTER = 2.5  # 满雨时雨层每帧随机错开的最大距离（逻辑 px），模仿原版的画面微震
 RES_W = 1366  # 各层贴图生成时的宽度上限（原版分辨率），合成时放大到屏幕分辨率
@@ -273,6 +273,7 @@ class Rain:
         self._fall = [0.0, 0.0]  # 合成贴图的 (x, y) 卷动量
         self._last_fall = [0.0, 0.0]
         self._regions = None  # 设备 px 的 (缩放, 露天, 屋檐下, 压暗) 裁剪区
+        self.window_block = False
         self._WL = 0.0
         self._HL = 0.0
         self._rects = []
@@ -298,7 +299,7 @@ class Rain:
     @property
     def shows(self) -> bool:
         """屏上有没有雨可画；全被窗口挡住时也有淡雨。"""
-        return self.intensity > 0.0 and self._WL > 0.0
+        return self.intensity > 0.0 and self._WL > 0.0 and (not self.window_block or bool(self.runs))
 
     def set_target(self, i):
         self.target = clampf(float(i), 0.0, I_MAX)
@@ -572,9 +573,14 @@ class Rain:
         k0 = min(int(x), KEYS)
         f = x - k0
         k1 = min(k0 + 1, KEYS)
-        want = {k0 - 1, k0, k1, k1 + 1}  # 前后各多备一张
+        want = {k0, k1}
+        if self.target > self.intensity:  # 雨强在变时多备下一张
+            want.add(k1 + 1)
+        elif self.target < self.intensity:
+            want.add(k0 - 1)
         for key in [key for key in self._jobs if key[0] == slot and key[4] not in want]:
-            if self._jobs[key].cancel():
+            job = self._jobs[key]
+            if job.cancel() or job.done():
                 del self._jobs[key]
         base = (slot, scale, self._WL)
         drawn = self._drawn.get(slot, bucket)
@@ -623,6 +629,16 @@ class Rain:
         pm.setDevicePixelRatio(a.devicePixelRatio())
         self._blend[slot] = (a, b, step, pm)
         return pm, 1.0
+
+    def release(self):
+        """雨停了放掉贴图，下次下雨再做。"""
+        for job in self._jobs.values():
+            job.cancel()
+        self._jobs.clear()
+        self._keys.clear()
+        self._blend.clear()
+        self._drawn.clear()
+        self._pool.submit(self._parts.clear)
 
     def _parts_for(self, slot, g, bucket):
         """slot 在画面强度 g 下的各层清单：(种类, 层, 档, 不透明度档)。"""
@@ -749,13 +765,16 @@ class Rain:
                 )
                 p.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
         offset = QPointF(-fx % CURTAIN_W, -fy % CURTAIN_H)
-        for region, (pm, op) in (
-            (open_air, self._layers("open", scale, 0, g)),
-            (open_air, self._layers("streak", scale, bucket, g)),
-            (shelter, self._layers("shelter", scale, 0, g)),
-            (indoor, self._layers("indoor", scale, bucket, g)),
+        for region, slot, slot_bucket in (
+            (open_air, "open", 0),
+            (open_air, "streak", bucket),
+            (shelter, "shelter", 0),
+            (indoor, "indoor", bucket),
         ):
-            if pm is None or region.isEmpty():
+            if region.isEmpty() or (region is indoor and self.window_block):
+                continue
+            pm, op = self._layers(slot, scale, slot_bucket, g)
+            if pm is None:
                 continue
             self._clip(p, xf, region)
             p.setOpacity(op)

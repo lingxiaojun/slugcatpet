@@ -156,7 +156,8 @@ class SlugcatBody:
         self.pole_input = (0, 0)  # 杆上这一 tick 想按的方向
         self.lane_hold = 0  # 被前面的猫挡住、不许走的方向（杆上、地上），由通行写
         self.lane_blocked = False  # 这一 tick 杆上被挡住、谁都让不开
-        self.ghost = 0  # 还要穿过别的猫多少 tick（被顶下杆尖后落下）
+        self.ghost = 0  # 还要穿过所有猫多少 tick（翻上、翻下横杆时）
+        self.ghost_of = {}
         self.foot_chunk = None  # 臀踩着的别的猫的那一节
         self.foot_mass = 0.0  # 踩着的那只猫的总质量
         self.foot_n = 0  # >0：还算踩着几 tick；<0：踩着跳完的冷却
@@ -302,9 +303,16 @@ class SlugcatBody:
         """穿行期间、背在背上时不和别的猫相撞；拉着的一对之间也不撞。"""
         if not isinstance(other, SlugcatBody):
             return True
-        if self.ghost or other.ghost or self.ride == "back" or other.ride == "back":
+        if self.ghost or other.ghost or other in self.ghost_of or self in other.ghost_of:
+            return False
+        if self.ride == "back" or other.ride == "back":
             return False
         return self.ride_with is not other and other.ride_with is not self
+
+    def pass_through(self, bodies, ticks):
+        for o in bodies:
+            if o is not self:
+                self.ghost_of[o] = max(self.ghost_of.get(o, 0), ticks)
 
     @property
     def steady(self):
@@ -573,6 +581,8 @@ class SlugcatBody:
     def step(self):
         self._prev_end_x1, self._end_x1 = self._end_x1, None
         self.ghost = max(0, self.ghost - 1)
+        if self.ghost_of:
+            self.ghost_of = {o: n - 1 for o, n in self.ghost_of.items() if n > 1}
         if self.foot_n:
             self.foot_n += -1 if self.foot_n > 0 else 1
             if self.foot_n == 0:

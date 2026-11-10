@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import math
+
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QShortcut, QKeySequence
+from PySide6.QtGui import QKeySequence, QShortcut, QTextCursor, QTextDocument, QTextOption
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -17,20 +19,13 @@ from ...i18n import t
 from ..theme import qss
 from ..widgets.dialogs import CardDialog
 
+EDIT_MIN_H = 96
+EDIT_MAX_H = 300
+FIT_SLACK = 2
 
-class _LimitedEdit(QPlainTextEdit):
-    """粘贴或拖入时只收下还放得下的部分。"""
 
-    def __init__(self, limit):
-        super().__init__()
-        self._limit = limit
-
-    def insertFromMimeData(self, source):
-        if not source.hasText():
-            return
-        room = self._limit - len(self.toPlainText()) + len(self.textCursor().selectedText())
-        if room > 0:
-            self.textCursor().insertText(source.text()[:room])
+def _u16(s: str) -> int:
+    return len(s.encode("utf-16-le")) // 2
 
 
 class PearlEditor(CardDialog):
@@ -38,10 +33,13 @@ class PearlEditor(CardDialog):
         super().__init__(t("pearl_title"), parent, width=320)
         self._limit = limit
         self._palette = palette
-        self.edit = _LimitedEdit(limit)
-        self.edit.setFixedHeight(96)
-        self.edit.setPlainText(text)
-        self.edit.textChanged.connect(self._clamp)
+        self._prev = text[:limit]
+        self.edit = QPlainTextEdit()
+        self.edit.setWordWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
+        self.edit.setFixedHeight(EDIT_MIN_H)
+        self._measure = QTextDocument(self)
+        self.edit.setPlainText(text[:limit])
+        self.edit.textChanged.connect(self._on_text)
         self.body.addWidget(self.edit)
         self._count = QLabel()
         self._count.setObjectName("pearlCount")
@@ -77,18 +75,51 @@ class PearlEditor(CardDialog):
         self._clamp()
         self.setStyleSheet(qss.PEARL_EDITOR)
 
+    def showEvent(self, ev):
+        super().showEvent(ev)
+        self._fit()
+
+    def _on_text(self):
+        self._clamp()
+        self._fit()
+
     def _clamp(self):
         s = self.edit.toPlainText()
-        if len(s) > self._limit:
-            cur = self.edit.textCursor()
-            pos = min(cur.position(), self._limit)
-            self.edit.blockSignals(True)
-            self.edit.setPlainText(s[: self._limit])
-            cur.setPosition(pos)
-            self.edit.setTextCursor(cur)
-            self.edit.blockSignals(False)
-            s = s[: self._limit]
+        over = len(s) - self._limit
+        if over > 0:
+            old = self._prev
+            a, n = 0, min(len(s), len(old))
+            while a < n and s[a] == old[a]:
+                a += 1
+            b = 0
+            while b < n - a and s[-1 - b] == old[-1 - b]:
+                b += 1
+            new = s[a : len(s) - b]
+            keep = new[: max(0, len(new) - over)]
+            cur = QTextCursor(self.edit.document())
+            cur.setPosition(_u16(s[:a]) + _u16(keep))
+            cur.setPosition(_u16(s[: len(s) - b]), QTextCursor.MoveMode.KeepAnchor)
+            cur.joinPreviousEditBlock()
+            cur.removeSelectedText()
+            cur.endEditBlock()
+            s = self.edit.toPlainText()
+        self._prev = s
         self._count.setText(f"{len(s)}/{self._limit}")
+
+    def _fit(self):
+        e = self.edit
+        m = self._measure
+        m.setDefaultFont(e.font())
+        m.setDefaultTextOption(e.document().defaultTextOption())
+        m.setDocumentMargin(e.document().documentMargin())
+        m.setPlainText(e.toPlainText())
+        m.setTextWidth(e.viewport().width())
+        extra = e.height() - e.viewport().height()
+        want = max(EDIT_MIN_H, min(EDIT_MAX_H, math.ceil(m.size().height()) + extra + FIT_SLACK))
+        if want != e.height():
+            e.setFixedHeight(want)
+            self.refit()
+            e.ensureCursorVisible()
 
     def focus_text(self):
         self.edit.setFocus()
